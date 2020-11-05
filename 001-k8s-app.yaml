@@ -1,0 +1,122 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: che-console
+    component: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: che-console
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: che-console
+        component: backend
+    spec:
+      containers:
+      - name: backend
+        image: containous/whoami:v1.5.0
+        args: ["--port", "8080"]
+        env:
+        - name: WHOAMI_NAME
+          value: Backend
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels:
+    app: che-console
+    component: backend
+spec:
+  selector:
+    app: che-console
+    component: backend
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080 
+# Uncomment for debugging purposes
+#---
+#apiVersion: networking.k8s.io/v1beta1
+#kind: Ingress
+#metadata:
+#  name: backend
+#  labels:
+#    app: che-console
+#    component: backend
+#spec:
+#  rules:
+#  - host: backend.{{MINIKUBE_IP}}.nip.io
+#    http:
+#      paths:
+#      - path: /
+#        backend:
+#          serviceName: backend
+#          servicePort: 8080        
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unauthed
+  labels:
+    app: che-console
+    component: unauthed
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: che-console
+      component: unauthed
+  template:
+    metadata:
+      labels:
+        app: che-console
+        component: unauthed
+    spec:
+      containers:
+      - name: backend
+        image: containous/whoami:v1.5.0
+        args: ["--port", "8080"]
+        env:
+        - name: WHOAMI_NAME
+          value: Without auth
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: unauthed
+  labels:
+    app: che-console
+    component: unauthed
+spec:
+  selector:
+    app: che-console
+    component: unauthed
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080 
+# Uncomment for debugging purposes
+#---
+#apiVersion: networking.k8s.io/v1beta1
+#kind: Ingress
+#metadata:
+#  name: unauthed
+#  labels:
+#    app: che-console
+#    component: unauthed
+#spec:
+#  rules:
+#  - host: unauthed.192.168.39.98.nip.io
+#    http:
+#      paths:
+#      - path: /
+#        backend:
+#          serviceName: unauthed
+#          servicePort: 8080

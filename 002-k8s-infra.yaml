@@ -1,0 +1,240 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traefik
+  labels: 
+    app: che-console
+    component: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: che-console
+      component: gateway
+  template:
+    metadata:
+      labels:
+        app: che-console
+        component: gateway
+    spec:
+      initContainers:
+      - name: process-config
+        image: alpine:3.12.1
+        volumeMounts:
+        - mountPath: /tmp/config
+          name: config-template
+        - mountPath: /tmp/processed
+          name: config
+        command: ["sh", "-c", 'for f in `ls /tmp/config`; do script="{"; for e in `env`; do key=`echo $e | cut -d"=" -f1`; script="$script sub(/\{\{$key\}\}/, ENVIRON[\"$key\"]);"; done; script="$script print}"; awk "$script" < /tmp/config/$f > /tmp/processed/$f; done']
+      containers:
+      - name: traefik
+        image: traefik/traefik:experimental-master
+        volumeMounts:
+        - mountPath: /etc/traefik
+          name: config
+      volumes:
+      - name: config-template
+        configMap:
+          name: traefik
+      - name: config
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: traefik
+  labels:
+    app: che-console
+    component: gateway
+data:
+  traefik-routes.yml: |
+    http:
+      serversTransports:
+        ignoreInvalid:
+          insecureSkipVerify: true
+      routers:
+        backend:
+          rule: "PathPrefix(`/`)"
+          service: backend-service
+          priority: 1
+        unauthed:
+          rule: "PathPrefix(`/anonymous`)"
+          service: unauthed-service
+          priority: 10
+          middlewares:
+          - unauthed
+        kubernetes:
+          rule: "PathPrefix(`/kubernetes`)"
+          service: kubernetes-service
+          priority: 10
+          middlewares:
+          - kubernetes
+      middlewares:
+        unauthed:
+          stripPrefix:
+            prefixes:
+              - "/anonymous"
+        kubernetes:
+          stripPrefix:
+            prefixes:
+              - "/kubernetes"
+      services:
+        backend-service:
+          loadBalancer:
+            servers:
+              - url: "http://backend:8080"
+        unauthed-service:
+          loadBalancer:
+            servers:
+              - url: "http://unauthed:8080"
+        kubernetes-service:
+          loadBalancer:
+            serversTransport: ignoreInvalid
+            servers:
+              - url: "https://{{KUBERNETES_SERVICE_HOST}}:{{KUBERNETES_SERVICE_PORT}}"
+  traefik.yml: |
+    global:
+      checkNewVersion: false
+      sendAnonymousUsage: false
+    entrypoints:
+      http: 
+        address: ":8080"
+        forwardedHeaders:
+          insecure: true
+      https:
+        address: ":8443"
+        forwardedHeaders:
+          insecure: true
+    log:
+      level: DEBUG
+    providers:
+      file:
+        filename: "/etc/traefik/traefik-routes.yml"
+    
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik
+  labels:
+    app: che-concole
+    component: gateway
+spec:
+  selector:
+    app: che-console
+    component: gateway
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth
+  labels:
+    app: che-console
+    component: oauth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: che-console
+      component: oauth
+  template:
+    metadata:
+      labels:
+        app: che-console
+        component: oauth
+    spec:
+      containers:
+      - name: oauth
+        image: quay.io/oauth2-proxy/oauth2-proxy:v6.1.1
+        args: ["--config=/etc/oauth2-proxy/config"]
+        volumeMounts:
+        - mountPath: /etc/oauth2-proxy
+          name: config
+      volumes:
+      - name: config
+        configMap:
+          name: oauth
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oauth
+  labels:
+    app: che-console
+    component: oauth
+data:
+  config: |
+    upstreams = ["http://traefik:8080"]
+    client_id = "{{CLIENT_ID}}"
+    # This can also be loaded using client_secret_file and through a secret
+    client_secret = "{{CLIENT_SECRET}}"
+    email_domains = "*"
+    # can be regenerated using:
+    # python -c 'import os,base64; print(base64.urlsafe_b64encode(os.urandom(16)).decode())'
+    cookie_secret = "yt8Q5UPl-9pY8Bnv8Rb_JQ=="
+    cookie_name = "_che_console_oauth"
+    http_address = "0.0.0.0:8080"
+    provider = "gitlab"
+    reverse_proxy = true
+    pass_authorization_header = true
+    pass_user_headers = false
+    request_logging = true
+    skip_auth_regex = ["/anonymous"]
+    cookie_refresh = "1m"
+    skip_jwt_bearer_tokens = true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth
+  labels:
+    app: che-console
+    component: oauth
+spec:
+  selector:
+    app: che-console
+    component: oauth
+  ports:
+  - protocol: TCP  
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: oauth
+  labels:
+    app: che-console
+    component: oauth
+spec:
+  rules:
+  - host: entry.{{MINIKUBE_IP}}.nip.io
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: oauth
+          servicePort: 8080
+# Uncomment for debugging purposes
+#---
+#apiVersion: networking.k8s.io/v1beta1
+#kind: Ingress
+#metadata:
+#  name: traefik
+#  labels:
+#    app: che-console
+#    component: gateway
+#spec:
+#  rules:
+#  - host: traefik.{{MINIKUBE_IP}}.nip.io
+#    http:
+#      paths:
+#      - path: /
+#        backend:
+#          serviceName: traefik
+#          servicePort: 8080

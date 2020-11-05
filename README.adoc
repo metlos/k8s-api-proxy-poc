@@ -1,0 +1,70 @@
+= Proof of concept for proxying k8s API
+
+This is a simple proof of concept that tries to show how to use an OAuth2 authentication
+and proxy access to the Kubernetes API using tokens provided by the OAuth2 provider.
+
+This demo only works with Minikube and Gitlab as the OIDC provider.
+
+## How to setup Gitlab
+
+In your Gitlab user settings, navigate to "Applications" and create a new OAuth2 application. The callback URI should be set to `https://entry.${MINIKUBE_IP}.nip.io/oauth2/callback`. The application should be given the `openid`, `profile` and `email` scopes.
+
+Once the application is saved, take note of the "Application ID" (aka client id) and "Secret" (aka client secret).
+
+Also take note of your Gitlab user ID visible on your profile page.
+
+## Installation
+
+The deployment is divided into 2 yaml files:
+
+`001-k8s-app.yaml` contains 2 "microservices" - `backend` is supposed to be accessed only using
+authenticated users, while `unauthed` is supposed to be accessible also to unauthenticated users.
+
+`002-k8s-infra.yaml` is where the magic happens. It defines an authenticating proxy - `oauth` - implemented using https://github.com/oauth2-proxy/oauth2-proxy and a gateway/router implemented using Traefik. 
+
+This demo uses Gitlab as the OIDC provider and requires you to supply your client ID (application ID in Gitlab parlance) in the `CLIENT_ID` environment variable and the client secret and the `CLIENT_SECRET` environment variable.
+
+To deploy the demo, use the following:
+
+```
+kubectl create namespace <YOUR_NAMESPACE>
+CLIENT_ID=<YOUR_CLIENT_ID> CLIENT_SECRET=<YOUR_CLIENT_SECRET> ./deploy-minikube.sh <YOUR_NAMESPACE>
+```
+
+## What's there
+
+The entrypoint to the application is then accessible on the `https://entry.${MINIKUBE_IP}.nip.io` address.
+
+The root of the application is authenticated and should display the authentication page which would authenticate with gitlab upon clicking the button on the page. 
+
+The `/anonymous` endpoint should be accessible without prior authentication.
+
+The `/kubernetes` endpoint should proxy the Kubernetes API using the user authenticated with Gitlab.
+
+## How is Kubernetes API proxied
+
+When you try to access the proxied k8s API endpoint, you should get an "unauthorized" error. That's because we have not yet created a user in the cluster that would correspond to the Gitlab user.
+
+To create a user with admin privileges (so that the full API is accessible), use the following:
+
+```
+kubectl create clusterrolebinding oidc-cluster-admin --clusterrole=cluster-admin --user='https://gitlab.com#<GITLAB_USER_ID>'
+```
+
+With this user created you should now be able to access the Kubernetes API (in your browser).
+
+## Current Limitations
+
+It is not currently possible to use kubectl with `https://entry.${MINIKUBE_IP}.nip.io/kubernetes` as the server endpoint (i.e. `kubectl -s https://entry.${MINIKUBE_IP}.nip.io/kubernetes ...`). I have not yet found the way of properly configuring oauth2-proxy to pass through requests that already have a bearer token.
+
+When I try to pass through the tokens using the `skip_jwt_bearer_tokens = true` configuration, I get the following errors:
+
+```
+2020/11/05 13:58:23] [logger.go:508] Error loading cookied session: cookie "_che_console_oauth" not present, removing session
+192.168.39.1 - - [2020/11/05 13:58:23] entry.192.168.39.47.nip.io GET - "/kubernetes/apis?timeout=32s" HTTP/1.1 "kubectl/v1.18.3 (linux/amd64) kubernetes/2e7996e" 403 2646 0.000
+[2020/11/05 13:58:23] [logger.go:508] Error retrieving session from token in Authorization header: unable to verify jwt token: "Bearer ... JWT TOKEN ..."
+
+```
+
+I don't consider that to be a huge problem for our usecase though (which is to be able to call kubernetes API from a rich web application, which therefore is running in the browser and has access to the oauth cookie which makes it all work).
+
